@@ -1,0 +1,21 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/captures
+.externalNativeBuild
+.cxx
+app/build/
+.kotlin/
+*.aab
+
+# Signing material (never commit)
+keystore/
+/keystore.properties
+*.jks
+
+# Local development artifacts
+app/src/main/java/com/fangxin/yiting/shot10.png
+app/src/main/java/com/fangxin/yiting/ui.xml
