@@ -19,8 +19,8 @@ android {
         applicationId = "com.fangxin.yiting"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 5
+        versionName = "1.0.4"
         resValue("string", "app_name", "放心一听")
 
         ndk {

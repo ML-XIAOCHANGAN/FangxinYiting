@@ -63,11 +63,17 @@ import com.fangxin.yiting.VoiceMachine
 import com.fangxin.yiting.domain.RiskDecision
 import com.fangxin.yiting.service.ScreenShareService
 
+private val TextScreenSentences = listOf(
+    "打字。",
+    "把可疑的话打在框里，再点判一判。",
+)
+
 @Composable
 fun YitingApp(machine: VoiceMachine, onTalk: () -> Unit) {
     var textOpen by remember { mutableStateOf(false) }
     var helpOpen by remember { mutableStateOf(false) }
     var familyOpen by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val projectionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -85,14 +91,29 @@ fun YitingApp(machine: VoiceMachine, onTalk: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Bg).safeDrawingPadding()) {
             if (familyOpen) {
                 FamilyScreen(machine) { familyOpen = false }
+            } else if (settingsOpen) {
+                SettingsScreen(
+                    machine,
+                    onBack = {
+                        machine.stopVoice()
+                        settingsOpen = false
+                    },
+                    onFamily = {
+                        machine.stopVoice()
+                        familyOpen = true
+                    },
+                )
             } else {
                 AudioScreen(
                     machine,
                     onTalk,
-                    onType = { textOpen = true },
-                    onFamily = {
+                    onType = {
+                        textOpen = true
+                        machine.announceScreen(TextScreenSentences)
+                    },
+                    onSettings = {
                         machine.stopVoice()
-                        familyOpen = true
+                        settingsOpen = true
                     },
                     onHelp = {
                         helpOpen = true
@@ -144,7 +165,7 @@ private fun AudioScreen(
     machine: VoiceMachine,
     onTalk: () -> Unit,
     onType: () -> Unit,
-    onFamily: () -> Unit,
+    onSettings: () -> Unit,
     onHelp: () -> Unit,
 ) {
     val status = when (machine.phase) {
@@ -176,11 +197,11 @@ private fun AudioScreen(
         ) {
             Text("放心一听", color = Cream, fontSize = 20.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onFamily, modifier = Modifier.semantics { contentDescription = "家人，配对和看警报" }) {
-                Text("家人", color = CreamSoft, fontSize = 18.sp)
+            TextButton(onClick = onHelp, modifier = Modifier.semantics { contentDescription = "帮助，看用法说明" }) {
+                Text("帮助", color = CreamSoft, fontSize = 18.sp)
             }
-            TextButton(onClick = onHelp, modifier = Modifier.semantics { contentDescription = "怎么用，看用法说明" }) {
-                Text("怎么用", color = CreamSoft, fontSize = 18.sp)
+            TextButton(onClick = onSettings, modifier = Modifier.semantics { contentDescription = "设置，家人配对和朗读开关" }) {
+                Text("设置", color = CreamSoft, fontSize = 18.sp)
             }
         }
 
@@ -439,7 +460,7 @@ private fun HelpDialog(onClose: () -> Unit, onDemo: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp),
         ) {
-            Text("怎么用", color = Cream, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text("帮助", color = Cream, fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(14.dp))
             Text("1. 点屏幕中间，把可疑的话说一遍；说完再点一下。", color = CreamSoft, fontSize = 19.sp, lineHeight = 28.sp)
             Spacer(Modifier.height(8.dp))

@@ -82,13 +82,28 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
     var watching by remember { mutableStateOf(false) }
     var waiting by remember { mutableStateOf(false) }
     var frame by remember { mutableStateOf<ImageBitmap?>(null) }
+    var lastAlertId by remember { mutableStateOf<String?>(null) }
 
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
 
+    LaunchedEffect(Unit) { machine.announceScreen(FamilySentences) }
+
     LaunchedEffect(paired) {
         if (paired) GuardianLinkService.start(context)
+    }
+
+    LaunchedEffect(alerts) {
+        val newest = alerts.firstOrNull() ?: return@LaunchedEffect
+        if (lastAlertId == null) {
+            // 进页面时历史里已有的提醒不再补念。
+            lastAlertId = newest.id
+            return@LaunchedEffect
+        }
+        if (newest.id == lastAlertId) return@LaunchedEffect
+        lastAlertId = newest.id
+        machine.announceReply(alertSentences(newest))
     }
 
     LaunchedEffect(Unit) {
@@ -99,6 +114,7 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
                         BitmapFactory.decodeByteArray(event.jpeg, 0, event.jpeg.size)?.asImageBitmap()
                     }
                     if (image != null) {
+                        if (!watching) machine.announceReply(listOf("老人屏幕过来了。"))
                         frame = image
                         watching = true
                         waiting = false
@@ -110,6 +126,7 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
                         watching = false
                         waiting = false
                         note = "老人已经停下来了。"
+                        machine.announceReply(listOf(note))
                     }
                 }
                 else -> Unit
@@ -125,6 +142,7 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
                     watching = false
                     frame = null
                     note = "你不看了。老人那边还会继续共享一会儿，直到他停或者满五分钟。"
+                    machine.announceReply(listOf("屏幕关掉了。"))
                 },
             )
         } else {
@@ -163,8 +181,10 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
                                 if (LinkClient.requestScreen()) {
                                     waiting = true
                                     note = "已经问老人了，等他点「同意」。"
+                                    machine.announceReply(listOf(note))
                                 } else {
                                     note = "还没连上老人手机，等一会儿再试。"
+                                    machine.announceReply(listOf(note))
                                 }
                             },
                             onClearAlerts = { store.clearAlerts() },
@@ -175,6 +195,7 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
                                 paired = false
                                 pairedRoom = ""
                                 note = "已经解除配对。老人那边不会再有提醒。"
+                                machine.announceReply(listOf(note))
                                 if (elderRoom.isNotBlank()) {
                                     LinkClient.connect(elderRoom, UserRole.ELDER, DEFAULT_RELAY_URL)
                                 }
@@ -187,6 +208,7 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
                             onConnect = {
                                 if (!LinkClient.isValidRoom(codeInput)) {
                                     note = "配对码是 9 位数字，再对一遍。"
+                                    machine.announceReply(listOf(note))
                                     return@UnpairedPanel
                                 }
                                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
@@ -198,6 +220,7 @@ fun FamilyScreen(machine: VoiceMachine, onClose: () -> Unit) {
                                 paired = true
                                 pairedRoom = codeInput
                                 note = "正在连老人手机，稍等一下。"
+                                machine.announceReply(listOf(note))
                                 codeInput = ""
                             },
                             elderRoom = elderRoom,
@@ -229,7 +252,7 @@ private fun UnpairedPanel(
 ) {
     SectionTitle("我是家人")
     Text(
-        "在老人的手机上打开放心一听，点「家人」，生成配对码，再输到这里。",
+        "在老人的手机上打开放心一听，点右上角「设置」，再点「家人配对与提醒」，生成配对码念给家人。",
         color = CreamSoft,
         fontSize = 18.sp,
         lineHeight = 27.sp,
@@ -496,6 +519,22 @@ private fun FamilyButton(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
+    }
+}
+
+private val FamilySentences = listOf(
+    "家人。",
+    "老人这边点生成配对码，念给家人听。",
+    "家人这边输进去，就能收到提醒，也能请求看屏幕。",
+)
+
+private fun alertSentences(alert: AlertEvent): List<String> {
+    val head = if (alert.risk == RiskDecision.RED) "紧急。" else "提醒。"
+    return buildList {
+        add(head)
+        add(alert.plain)
+        if (alert.maskedText.isNotBlank()) add("老人学到的是：" + alert.maskedText)
+        alert.actions.firstOrNull()?.let { add("告诉老人：$it") }
     }
 }
 

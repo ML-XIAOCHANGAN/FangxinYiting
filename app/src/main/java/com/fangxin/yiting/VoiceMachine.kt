@@ -4,11 +4,13 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import android.speech.SpeechRecognizer
+import android.view.accessibility.AccessibilityManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.fangxin.yiting.audio.Cues
 import com.fangxin.yiting.data.LinkStore
+import com.fangxin.yiting.data.SettingsStore
 import com.fangxin.yiting.domain.AlertEvent
 import com.fangxin.yiting.domain.CheckResult
 import com.fangxin.yiting.domain.CheckSource
@@ -27,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -40,6 +43,8 @@ class VoiceMachine(private val app: Application) {
     private val tts = Tts(app)
     private val cues = Cues(app)
     private val links = LinkStore.get(app)
+    private val settings = SettingsStore.get(app)
+    private val a11y: AccessibilityManager? = app.getSystemService(AccessibilityManager::class.java)
 
     private var dictation: Dictation? = null
     private var listenTimer: Runnable? = null
@@ -62,13 +67,22 @@ class VoiceMachine(private val app: Application) {
     var screenAsk by mutableStateOf(false)
         private set
 
+    /** 系统在朗读屏幕（TalkBack / 触摸探索）时，界面朗读自动让位。 */
+    var screenReaderOn by mutableStateOf(false)
+        private set
+
+    val screenSpeech: StateFlow<Boolean> = settings.screenSpeech
+    val replySpeech: StateFlow<Boolean> = settings.replySpeech
+
     val micAvailable: Boolean = SpeechRecognizer.isRecognitionAvailable(app)
     val elderRoom: String get() = links.elderRoom
 
     init {
+        screenReaderOn = a11y?.isTouchExplorationEnabled == true
+        a11y?.addTouchExplorationStateChangeListener { enabled -> screenReaderOn = enabled }
         scope.launch {
             kotlinx.coroutines.delay(350)
-            speakScript(IntroSentences)
+            announceScreen(IntroSentences)
         }
         if (links.elderRoom.isNotBlank()) connectAsElder()
         scope.launch {
@@ -94,7 +108,7 @@ class VoiceMachine(private val app: Application) {
         speakScript(
             listOf(
                 "配对码是 $digits。",
-                "让家人在他们的手机上打开放心一听，点家人，把这个码输进去。",
+                "让家人在他们的手机上打开放心一听，点设置，再点家人，把这个码输进去。",
                 "码记不住，就点「再念一遍」。",
             ),
         )
@@ -112,7 +126,7 @@ class VoiceMachine(private val app: Application) {
         screenAsk = true
         tts.stop()
         cues.stopHeartbeat()
-        speakScript(
+        announceReply(
             listOf(
                 "家人想看看你的屏幕。",
                 "看一会儿就关，画面不保存。",
@@ -133,8 +147,25 @@ class VoiceMachine(private val app: Application) {
         }
     }
 
-    fun speakScript(sentences: List<String>) {
+    fun setScreenSpeech(on: Boolean) = settings.setScreenSpeech(on)
+
+    fun setReplySpeech(on: Boolean) = settings.setReplySpeech(on)
+
+    /** 切屏要点：开关关着、或系统读屏正在念时不开口。 */
+    fun announceScreen(sentences: List<String>) =
+        enqueue(sentences, screenSpeech.value && !screenReaderOn)
+
+    /** 结论与回复：只看「结论和回答」开关，系统读屏不让位。 */
+    fun announceReply(sentences: List<String>) = enqueue(sentences, replySpeech.value)
+
+    fun speakScript(sentences: List<String>) = enqueue(sentences, allowed = true)
+
+    private fun enqueue(sentences: List<String>, allowed: Boolean) {
         script = sentences
+        if (!allowed) {
+            subtitle = ""
+            return
+        }
         tts.speakSentences(
             sentences,
             onSentence = { index -> subtitle = sentences.getOrElse(index) { "" } },
@@ -168,7 +199,7 @@ class VoiceMachine(private val app: Application) {
             phase = Phase.IDLE
             cues.error()
             note = "这台手机不能直接听说，可以在旁边打字。"
-            speakScript(listOf("这台手机不能直接听说。你可以在下面打字，或者让家人帮你听。"))
+            announceReply(listOf("这台手机不能直接听说。你可以在下面打字，或者让家人帮你听。"))
             return
         }
 
@@ -208,7 +239,7 @@ class VoiceMachine(private val app: Application) {
             phase = Phase.IDLE
             cues.error()
             note = "没听清，靠近手机再说一次。"
-            speakScript(listOf("没听清。再按一下屏幕，靠近手机，慢慢说。"))
+            announceReply(listOf("没听清。再按一下屏幕，靠近手机，慢慢说。"))
             return
         }
         cues.stopTone()
@@ -223,7 +254,7 @@ class VoiceMachine(private val app: Application) {
             phase = Phase.IDLE
             cues.error()
             note = "没听清，靠近手机再说一次。"
-            speakScript(listOf("没听清。再按一下屏幕，靠近手机，慢慢说。"))
+            announceReply(listOf("没听清。再按一下屏幕，靠近手机，慢慢说。"))
             return
         }
         transcript = text
@@ -244,7 +275,7 @@ class VoiceMachine(private val app: Application) {
                 "没拿到麦克风，可以在系统设置里打开。"
             else -> "没听清，再说一次。"
         }
-        speakScript(listOf(note + "也可以在下面打字。"))
+        announceReply(listOf(note + "也可以在下面打字。"))
     }
 
     private fun handleUtterance(text: String) {
@@ -265,7 +296,7 @@ class VoiceMachine(private val app: Application) {
             return
         }
         if (compact.length <= 8 && Regex("(怎么用|帮助|帮助我)").containsMatchIn(compact)) {
-            speakScript(helpSentences())
+            announceScreen(helpSentences())
             return
         }
         judge(text)
@@ -307,7 +338,7 @@ class VoiceMachine(private val app: Application) {
                     phase = Phase.IDLE
                     note = "小望说"
                     transcript = answer.reply
-                    speakScript(listOf(answer.reply))
+                    announceReply(listOf(answer.reply))
                 }
                 null -> finish(RiskCheck.cloudMiss(local, local.source), my)
             }
@@ -344,7 +375,7 @@ class VoiceMachine(private val app: Application) {
             (value.risk == RiskDecision.RED || value.risk == RiskDecision.AMBER) &&
             sendAlert(value)
         if (tellFamily) sentences += "已经告诉家人了。"
-        speakScript(sentences)
+        announceReply(sentences)
     }
 
     private fun sendAlert(value: CheckResult): Boolean = LinkClient.sendAlert(
@@ -418,7 +449,7 @@ class VoiceMachine(private val app: Application) {
     )
 
     fun speakHelp() {
-        speakScript(helpSentences())
+        announceScreen(helpSentences())
     }
 
     fun stopVoice() {
@@ -451,7 +482,7 @@ class VoiceMachine(private val app: Application) {
     fun micDenied() {
         phase = Phase.IDLE
         note = "没拿到麦克风。可以在系统设置里打开，或者打字。"
-        speakScript(listOf("没拿到麦克风。可以去手机设置里打开，或者直接在下面打字。"))
+        announceReply(listOf("没拿到麦克风。可以去手机设置里打开，或者直接在下面打字。"))
     }
 
     fun stopAll() {
